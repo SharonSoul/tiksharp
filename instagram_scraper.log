@@ -1,0 +1,2 @@
+2025-06-07 04:25:19,820 - INFO - HTTP Request: GET https://www.instagram.com/p/DHL5M8esSWa/?igsh=MTI5ODY5NjJvZHk4MA== "HTTP/1.1 200 OK"
+2025-06-07 04:25:22,112 - ERROR - Error scraping post: Could not extract username from post URL

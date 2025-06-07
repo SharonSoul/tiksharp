@@ -16,7 +16,6 @@ def readme():
 
 
 def get_git_hash():
-
     def _minimal_ext_cmd(cmd):
         # construct minimal environment
         env = {}
@@ -43,16 +42,8 @@ def get_git_hash():
 def get_hash():
     if os.path.exists('.git'):
         sha = get_git_hash()[:7]
-    # currently ignore this
-    # elif os.path.exists(version_file):
-    #     try:
-    #         from basicsr.version import __version__
-    #         sha = __version__.split('+')[-1]
-    #     except ImportError:
-    #         raise ImportError('Unable to get git version')
     else:
         sha = 'unknown'
-
     return sha
 
 
@@ -64,8 +55,12 @@ __gitsha__ = '{}'
 version_info = ({})
 """
     sha = get_hash()
-    with open('VERSION', 'r') as f:
-        SHORT_VERSION = f.read().strip()
+    try:
+        with open('VERSION', 'r') as f:
+            SHORT_VERSION = f.read().strip()
+    except FileNotFoundError:
+        SHORT_VERSION = '1.4.2'  # Default version if VERSION file doesn't exist
+    
     VERSION_INFO = ', '.join([x if x.isdigit() else f'"{x}"' for x in SHORT_VERSION.split('.')])
 
     version_file_str = content.format(time.asctime(), SHORT_VERSION, sha, VERSION_INFO)
@@ -74,9 +69,12 @@ version_info = ({})
 
 
 def get_version():
-    with open(version_file, 'r') as f:
-        exec(compile(f.read(), version_file, 'exec'))
-    return locals()['__version__']
+    try:
+        with open(version_file, 'r') as f:
+            exec(compile(f.read(), version_file, 'exec'))
+        return locals()['__version__']
+    except (FileNotFoundError, KeyError):
+        return '1.4.2'  # Default version if version.py doesn't exist or is invalid
 
 
 def make_cuda_ext(name, module, sources, sources_cuda=None):

@@ -76,7 +76,7 @@ function getMediaType(url) {
   return 'unknown';
 }
 
-// Helper function to download media
+// Helper function to download media (for reels only)
 async function downloadMedia(url, outputPath, type) {
   const baseArgs = [
     url,
@@ -92,16 +92,6 @@ async function downloadMedia(url, outputPath, type) {
   let args;
   switch (type) {
     case 'reel':
-      args = [...baseArgs, '--format', 'best'];
-      break;
-    case 'post':
-      args = [
-        ...baseArgs,
-        '--format', 'best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best',
-        '--no-playlist'
-      ];
-      break;
-    case 'story':
       args = [...baseArgs, '--format', 'best'];
       break;
     default:
@@ -199,136 +189,79 @@ app.post('/api/fetch-post', async (req, res) => {
     }
 
     console.log('Fetching post from URL:', url);
-    const timestamp = Date.now();
-    const outputDir = path.join(uploadsDir, `post_${timestamp}`);
     
-    // Create a temporary directory for this post's images
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
+    const options = {
+      mode: 'text',
+      pythonPath: findPythonPath(),
+      scriptPath: __dirname,
+      args: [url]
+    };
 
-    try {
-      // First try to get info about the post with additional options
-      const info = await ytDlp.getVideoInfo(url, {
-        dumpSingleJson: true,
-        noCheckCertificates: true,
-        noWarnings: true,
-        preferFreeFormats: true,
-        addHeader: [
-          'Referer: https://www.instagram.com/',
-          'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        ]
-      });
-      console.log('Post info:', info);
-
-      // Get all available formats
-      const formats = info.formats || [];
-      console.log('Available formats:', formats);
-
-      // Try to find image formats
-      const imageFormats = formats.filter(format => 
-        format.ext === 'jpg' || format.ext === 'jpeg' || format.ext === 'png' ||
-        format.format_note?.includes('image') || format.format_id?.includes('image')
-      );
-
-      if (imageFormats.length === 0) {
-        // If no image formats found, try downloading with a more general format
-        const outputPath = path.join(outputDir, 'image.jpg');
-        const args = [
-          url,
-          '-o', outputPath,
-          '--format', 'best[ext=jpg]/best[ext=jpeg]/best[ext=png]/best',
-          '--no-check-certificates',
-          '--no-warnings',
-          '--prefer-free-formats',
-          '--add-header', 'Referer: https://www.instagram.com/',
-          '--add-header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          '--no-playlist'
-        ];
-
-        await new Promise((resolve, reject) => {
-          const process = ytDlp.exec(args, {
-            onStdout: (data) => console.log('yt-dlp output:', data),
-            onStderr: (data) => console.error('yt-dlp error:', data)
-          });
-
-          process.on('close', (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`yt-dlp failed with code ${code}`));
-          });
-        });
-
-        if (fs.existsSync(outputPath)) {
-          const stats = fs.statSync(outputPath);
-          if (stats.size > 0) {
-            return res.json({
-              images: [{
-                url: `/uploads/post_${timestamp}/image.jpg`,
-                filename: 'image.jpg'
-              }]
-            });
+    PythonShell.run('instagram_graphql_scraper.py', options).then(results => {
+      if (results && results.length > 0) {
+        try {
+          const response = JSON.parse(results[0]);
+          
+          if (response.error) {
+            console.error('Error from Python scraper:', response.error);
+            return res.status(500).json({ error: response.error });
           }
-        }
-        throw new Error('No images found in the post');
-      }
 
-      // Download each image
-      const imageUrls = [];
-      for (let i = 0; i < imageFormats.length; i++) {
-        const format = imageFormats[i];
-        const outputPath = path.join(outputDir, `image_${i + 1}.${format.ext}`);
-        
-        const args = [
-          url,
-          '-o', outputPath,
-          '--format', format.format_id,
-          '--no-check-certificates',
-          '--no-warnings',
-          '--prefer-free-formats',
-          '--add-header', 'Referer: https://www.instagram.com/',
-          '--add-header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        ];
-
-        await new Promise((resolve, reject) => {
-          const process = ytDlp.exec(args, {
-            onStdout: (data) => console.log('yt-dlp output:', data),
-            onStderr: (data) => console.error('yt-dlp error:', data)
-          });
-
-          process.on('close', (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`yt-dlp failed with code ${code}`));
-          });
-        });
-
-        if (fs.existsSync(outputPath)) {
-          const stats = fs.statSync(outputPath);
-          if (stats.size > 0) {
-            imageUrls.push({
-              url: `/uploads/post_${timestamp}/image_${i + 1}.${format.ext}`,
-              filename: `image_${i + 1}.${format.ext}`
+          // Extract media URLs from the post data
+          const mediaFiles = [];
+          
+          // Handle carousel posts
+          if (response.edge_sidecar_to_children) {
+            response.edge_sidecar_to_children.edges.forEach(edge => {
+              const node = edge.node;
+              if (node.is_video) {
+                mediaFiles.push({
+                  url: node.video_url,
+                  filename: `video_${Date.now()}.mp4`,
+                  type: 'video'
+                });
+              } else {
+                mediaFiles.push({
+                  url: node.display_url,
+                  filename: `image_${Date.now()}.jpg`,
+                  type: 'image'
+                });
+              }
             });
+          } else {
+            // Handle single media posts
+            if (response.is_video) {
+              mediaFiles.push({
+                url: response.video_url,
+                filename: `video_${Date.now()}.mp4`,
+                type: 'video'
+              });
+            } else {
+              mediaFiles.push({
+                url: response.display_url,
+                filename: `image_${Date.now()}.jpg`,
+                type: 'image'
+              });
+            }
           }
+          
+          if (mediaFiles.length === 0) {
+            return res.status(404).json({ error: 'No media found in post' });
+          }
+          
+          res.json({ images: mediaFiles });
+        } catch (error) {
+          console.error('Error parsing Python results:', error);
+          res.status(500).json({ error: 'Failed to parse media results' });
         }
+      } else {
+        res.status(500).json({ error: 'No results from Python scraper' });
       }
+    }).catch(error => {
+      console.error('Error running Python scraper:', error);
+      res.status(500).json({ error: 'Failed to fetch post', details: error.message });
+    });
 
-      if (imageUrls.length === 0) {
-        throw new Error('Failed to download any images from the post');
-      }
-
-      res.json({ images: imageUrls });
-
-    } catch (error) {
-      console.error('Error downloading post:', error);
-      // Clean up the temporary directory
-      if (fs.existsSync(outputDir)) {
-        fs.rmSync(outputDir, { recursive: true, force: true });
-      }
-      res.status(500).json({ 
-        error: 'Failed to download post',
-        details: error.message 
-      });
-    }
   } catch (error) {
     console.error('Error in fetch-post endpoint:', error);
     res.status(500).json({ error: 'Failed to fetch post' });
@@ -343,33 +276,39 @@ app.post('/api/fetch-story', async (req, res) => {
     }
 
     console.log('Fetching story from URL:', url);
-    const timestamp = Date.now();
-    const outputPath = path.join(uploadsDir, `story_${timestamp}.mp4`);
+    
+    const options = {
+      mode: 'text',
+      pythonPath: findPythonPath(),
+      scriptPath: __dirname,
+      args: [url, 'story']
+    };
 
-    try {
-      await downloadMedia(url, outputPath, 'story');
-      
-      if (!fs.existsSync(outputPath)) {
-        throw new Error('Downloaded file not found');
+    PythonShell.run('instagram_scraper.py', options).then(results => {
+      if (results && results.length > 0) {
+        try {
+          const mediaFiles = JSON.parse(results[0]);
+          if (mediaFiles && mediaFiles.length > 0) {
+            res.json({
+              mediaUrl: mediaFiles[0].url,
+              filename: mediaFiles[0].filename,
+              type: mediaFiles[0].type
+            });
+          } else {
+            res.status(500).json({ error: 'No story media found' });
+          }
+        } catch (error) {
+          console.error('Error parsing Python results:', error);
+          res.status(500).json({ error: 'Failed to parse media results' });
+        }
+      } else {
+        res.status(500).json({ error: 'No results from Python scraper' });
       }
-      
-      const stats = fs.statSync(outputPath);
-      if (stats.size === 0) {
-        throw new Error('Downloaded file is empty');
-      }
+    }).catch(error => {
+      console.error('Error running Python scraper:', error);
+      res.status(500).json({ error: 'Failed to fetch story', details: error.message });
+    });
 
-      const mediaUrl = `/uploads/${path.basename(outputPath)}`;
-      res.json({ mediaUrl });
-    } catch (error) {
-      console.error('Error downloading story:', error);
-      if (fs.existsSync(outputPath)) {
-        fs.unlinkSync(outputPath);
-      }
-      res.status(500).json({ 
-        error: 'Failed to download story',
-        details: error.message 
-      });
-    }
   } catch (error) {
     console.error('Error in fetch-story endpoint:', error);
     res.status(500).json({ error: 'Failed to fetch story' });

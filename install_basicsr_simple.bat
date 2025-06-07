@@ -8,11 +8,8 @@ cd temp_basicsr
 :: Clone the repository
 git clone https://github.com/XPixelGroup/BasicSR.git .
 
-:: Checkout specific version
-git checkout v1.4.2
-
-:: Install the package
-pip install -e .
+:: Install the package directly
+pip install .
 
 :: Clean up
 cd ..
