@@ -6,6 +6,7 @@ const fs = require('fs');
 const { PythonShell } = require('python-shell');
 const YTDlpWrap = require('yt-dlp-wrap').default; 
 
+
 const app = express();
 const port = process.env.PORT || 3001;
 
@@ -250,7 +251,7 @@ app.post('/api/fetch-post', async (req, res) => {
           }
           
           res.json({ images: mediaFiles });
-        } catch (error) {
+    } catch (error) {
           console.error('Error parsing Python results:', error);
           res.status(500).json({ error: 'Failed to parse media results' });
         }
